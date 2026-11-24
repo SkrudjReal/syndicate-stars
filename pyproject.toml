@@ -1,0 +1,101 @@
+[project]
+name = "stars-quest"
+version = "0.1.0"
+description = "Telegram Stars quests bot"
+readme = "README.md"
+requires-python = ">=3.15,<3.16"
+dependencies = [
+    "aiogram>=3.10.0,<4.0.0",
+    "sqlalchemy[asyncio]>=2.0.23,<3",
+    "alembic>=1.13.1,<2.0.0",
+    "pydantic>=2.12,<3",
+    "cachetools>=5.3.3,<6.0.0",
+    "redis>=5.0.5,<6.0.0",
+    "pytz>=2024.1,<2025.0",
+    "psutil>=7,<8",
+    "asyncpg>=0.31,<1",
+    "dotenv>=0.9.9,<0.10.0",
+    "aiocryptopay>=0.4.8,<0.5.0",
+    "crypto-cloud-py>=0.2,<0.3",
+    "docker>=7.1.0,<8.0.0",
+    "uvicorn>=0.37.0,<0.38.0",
+    "httpx>=0.28.1,<0.29.0",
+    "tonsdk>=1.0.15,<2.0.0",
+    "tonutils>=0.5.3,<0.6.0",
+    "aiogram-dialog>=2.4.0,<3.0.0",
+    "forex-python>=1.9.2,<2.0.0",
+    "pydantic-settings>=2.11.0,<3.0.0",
+    "fkassa>=0.0.2,<0.0.3",
+    "playwright>=1.58.0,<2.0.0",
+    "xrocket",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+xrocket = { git = "https://github.com/SkrudjReal/xrocket" }
+
+[dependency-groups]
+dev = ["mypy>=1.10.0,<2.0.0", "pre-commit>=3.7.1,<4.0.0"]
+test = ["pytest>=9,<10", "pytest-asyncio>=1,<2"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+filterwarnings = "ignore::DeprecationWarning"
+addopts = "-v -s"
+
+[tool.ruff]
+fix = true
+unsafe-fixes = true
+line-length = 125
+cache-dir = "/tmp/ruff-cache/"
+extend-exclude = ["migrations"]
+lint.select = [
+    "C4",
+    "E",
+    "F",
+    "T10",
+    "T20",
+    "Q",
+    "RET",
+]
+
+
+
+[tool.ruff.lint.isort]
+no-lines-before = ["future", "standard-library"]
+known-local-folder = ["bot", ]
+
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/*.py" = ["ANN401", "S101", "S311"]
+
+[tool.mypy]
+python_version = "3.15"
+plugins = ["pydantic.mypy", "sqlalchemy.ext.mypy.plugin"]
+files = "bot/*.py"
+ignore_missing_imports = false
+warn_return_any = true
+warn_unused_configs = true
+show_error_codes = true
+show_error_context = true
+pretty = true
+disallow_subclassing_any = true
+disallow_any_generics = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+follow_imports_for_stubs = true
+namespace_packages = true
+show_absolute_path = true
+
+
+[[tool.mypy.overrides]]
+module = "asyncpg.*"
+ignore_missing_imports = true

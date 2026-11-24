@@ -1,0 +1,53 @@
+# Override для использования существующего postgres из другой compose-сети
+# Запуск:
+#   docker compose -f docker-compose.yml -f docker-compose.shared.yml up -d
+#
+# Требует в .env:
+#   PG_ADMIN_USER=postgres
+#   PG_ADMIN_PASSWORD=пароль_админа
+#   SHARED_NETWORK=shared-postgres
+
+services:
+  postgres:
+    profiles: ["disabled"]
+
+  db_init:
+    image: postgres:16-alpine
+    container_name: stars_quest_db_init
+    restart: "no"
+    environment:
+      PGHOST: postgres
+      PGUSER: ${PG_ADMIN_USER:-postgres}
+      PGPASSWORD: ${PG_ADMIN_PASSWORD}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        until pg_isready -h $$PGHOST -U $$PGUSER; do sleep 1; done
+        psql -tc "SELECT 1 FROM pg_roles WHERE rolname='$$DB_USER'" | grep -q 1 || \
+          psql -c "CREATE USER \"$$DB_USER\" WITH PASSWORD '$$DB_PASSWORD';"
+        psql -tc "SELECT 1 FROM pg_database WHERE datname='$$DB_NAME'" | grep -q 1 || \
+          psql -c "CREATE DATABASE \"$$DB_NAME\" OWNER \"$$DB_USER\";"
+        psql -c "GRANT ALL PRIVILEGES ON DATABASE \"$$DB_NAME\" TO \"$$DB_USER\";"
+        echo "DB ready"
+    networks:
+      - shared
+
+  bot:
+    depends_on:
+      postgres: !reset null
+      redis:
+        condition: service_healthy
+      db_init:
+        condition: service_completed_successfully
+    networks:
+      - default
+      - shared
+
+networks:
+  shared:
+    name: ${SHARED_NETWORK:-shared-postgres}
+    external: true

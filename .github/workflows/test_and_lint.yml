@@ -1,0 +1,41 @@
+name: Tests
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      BOT_TOKEN: '123456789:TEST_TOKEN_FOR_TESTS_ONLY'
+      DB_IP: '127.0.0.1:5432'
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: testdb
+      REFERRAL_TEST_DATABASE_URL: 'postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/testdb'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen --all-groups
+      - name: Configure test defaults
+        run: cp .env.example .env
+      - name: Check code and dependencies
+        run: |
+          uv run --frozen pytest
+          uv pip check
+          uv run --frozen python -m compileall -q bot scripts migrations
