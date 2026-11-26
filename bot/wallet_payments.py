@@ -133,7 +133,7 @@ async def confirm(invoice_id, receipt):
     try:
         async with sessionmaker() as session, session.begin():
             invoice = await session.scalar(select(WalletInvoice).where(WalletInvoice.id == invoice_id).with_for_update())
-            if not invoice or invoice.status not in ('pending', 'expired'):
+            if not invoice or invoice.provider != 'wallet' or invoice.status not in ('pending', 'expired'):
                 return False
             if receipt['memo'] != invoice.order_id or receipt['amount'] != invoice.atomic_amount or receipt['timestamp'] < invoice.created:
                 return False
@@ -172,8 +172,8 @@ async def deliver(invoice, bot):
     if not claimed:
         return
     try:
-        await register_payment('wallet', claimed.order_id, claimed.buyer_id, claimed.base_stars)
-        await credit_payment('wallet', claimed.order_id)
+        await register_payment(claimed.provider, claimed.order_id, claimed.buyer_id, claimed.base_stars)
+        await credit_payment(claimed.provider, claimed.order_id)
         try:
             method = fragment_api.create_star_buy_invoice if claimed.product == 'stars' else fragment_api.create_premium_gift_invoice
             result = await asyncio.to_thread(method, claimed.quantity, claimed.recipient)
@@ -209,6 +209,7 @@ async def deliver(invoice, bot):
 async def scan(bot):
     async with sessionmaker() as session:
         invoices = (await session.scalars(select(WalletInvoice).where(
+            WalletInvoice.provider == 'wallet',
             WalletInvoice.bot_id == bot.id, WalletInvoice.status.in_(('pending', 'expired', 'paid')),
             WalletInvoice.created >= int(time.time()) - 86400,
         ).order_by(WalletInvoice.created))).all()
@@ -247,6 +248,7 @@ async def scan(bot):
             before = min(tx.lt for tx in transactions) - 1
     async with sessionmaker() as session, session.begin():
         await session.execute(update(WalletInvoice).where(
+            WalletInvoice.provider == 'wallet',
             WalletInvoice.bot_id == bot.id, WalletInvoice.status == 'pending',
             WalletInvoice.expires < int(time.time()),
         ).values(status='expired'))
@@ -256,6 +258,7 @@ async def recover_payments(bot):
     # A transfer may have reached TON before the previous process stopped.
     async with sessionmaker() as session, session.begin():
         await session.execute(update(WalletInvoice).where(
+            WalletInvoice.provider == 'wallet',
             WalletInvoice.bot_id == bot.id, WalletInvoice.status == 'processing',
         ).values(status='review'))
     while True:

@@ -93,6 +93,8 @@ async def _main() -> None:
     referral_task = asyncio.create_task(recover_payments())
     from bot.wallet_payments import recover_payments as recover_wallet_payments
     wallet_task = asyncio.create_task(recover_wallet_payments(bot))
+    from bot.xrocket_payments import recover_payments as recover_xrocket_payments
+    xrocket_task = asyncio.create_task(recover_xrocket_payments(bot))
     try:
         with contextlib.suppress(KeyboardInterrupt, SystemExit):
             await dp.start_polling(bot)
@@ -100,7 +102,10 @@ async def _main() -> None:
         await shutdown_broadcasts()
         referral_task.cancel()
         wallet_task.cancel()
+        xrocket_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await referral_task
         with contextlib.suppress(asyncio.CancelledError):
             await wallet_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await xrocket_task

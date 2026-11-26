@@ -174,10 +174,44 @@ shares the Fragment wallet client's 1 request/second limiter and 429 retries.
 The payment selector is grouped into rubles/SBP/cards, cryptocurrency and other
 methods, for both Stars and Premium. Category navigation edits the current
 message and preserves gift recipients, quantities and subscription periods.
-CodeePay SBP/cards, Platega SBP/crypto, Iris, UAH, LolzTeam and xRocket buttons
+CodeePay SBP/cards, Platega SBP/crypto, Iris, UAH and LolzTeam buttons
 show an unavailable alert until their integrations and credentials are added.
 No payment links or unverified prices are issued for those methods yet. Existing
 FreeKassa SBP/card and CryptoBot routes remain available inside their categories.
+
+xRocket uses the [current Pay API](https://docs.xrocket.exchange/api/pay/pay-api-overview),
+not the deprecated Legacy API or its installed historical SDK. Set private
+`XROCKET_TOKEN` (Bearer authorization) and `XROCKET_WEBHOOK_TOKEN` (webhook HMAC
+secret). These credentials are different and must never be put in Git or logs.
+Both Stars and Premium, including gifts, use a fixed-price USDT invoice. The
+2% markup is included in the quoted amount; the provider's own fee is paid by
+the application, not added again to the payer. The USD quote is converted using
+the cached USDT/USD rate and rounded up to cents. Invoices expire in 15 minutes;
+the API's `expiresIn` value is milliseconds.
+
+Expected amount, product, gift recipient and reward base are committed before
+creating a remote invoice. `clientInvoiceId` is stable across an ambiguous POST:
+the client reads the invoice back by that same ID rather than creating another.
+The shared durable invoice/delivery ledger uses `provider=xrocket`; direct-chain
+scans cannot confirm a hosted invoice. Only exact `paid` status with matching
+invoice ID, client ID, USDT currency and amount enables the existing atomic
+delivery claim. Duplicate API checks and webhooks cannot repeat fulfillment or
+referral credit. Pending orders recover after restart. Only explicit HTTP 429
+responses are retried with `Retry-After`; no payouts or withdrawals are exposed.
+
+Polling works locally without any public callback. When deploying the receiver,
+optionally set `XROCKET_CALLBACK_URL` to your public HTTPS origin followed by
+`/notifications/xrocket`. Include the updated nginx location and restart the
+receiver. Do not set this URL to an old deployment that lacks the handler or to
+a receiver using a different database from the bot. Alternatively configure the
+same URL in the app's xRocket settings.
+
+The receiver verifies the raw-body HMAC-SHA256 (`Signature`, `Signature-Version:
+v1`, and a millisecond `Signature-Timestamp` within five minutes) before parsing
+or accessing orders. It commits verified invoice status before returning HTTP
+200. Non-completion and unknown events are acknowledged without delivery;
+expiry is detected by polling. Out-of-order `active` events cannot downgrade a
+paid or fulfilled order. See [signature verification](https://docs.xrocket.exchange/api/pay/webhooks/signature).
 
 Direct invoices last 15 minutes and contain a unique mandatory memo. Amounts
 are rounded up to 4 decimals for TON or 2 for USDT using TonAPI's USD quote.

@@ -430,7 +430,7 @@ async def payment_category(query: types.CallbackQuery, callback_data: PayMethod 
     await get_editor(query)(text, reply_markup=keyboard)
 
 
-UNCONFIGURED_PAYMENTS = {'pay_lolzteam', 'pay_xrocket', 'pay_codeesbp', 'pay_codeecard',
+UNCONFIGURED_PAYMENTS = {'pay_lolzteam', 'pay_codeesbp', 'pay_codeecard',
                        'pay_plategasbp', 'pay_plategacrypto', 'pay_iris', 'pay_uah'}
 
 
@@ -438,6 +438,55 @@ UNCONFIGURED_PAYMENTS = {'pay_lolzteam', 'pay_xrocket', 'pay_codeesbp', 'pay_cod
 @router.callback_query(PremiumPayMethod.filter(F.method.in_(UNCONFIGURED_PAYMENTS)))
 async def payment_not_configured(query: types.CallbackQuery) -> None:
     await query.answer('Этот способ оплаты пока недоступен. Выберите другой.', show_alert=True)
+
+
+@router.callback_query(PayMethod.filter(F.method == 'pay_xrocket'))
+@router.callback_query(PremiumPayMethod.filter(F.method == 'pay_xrocket'))
+async def pay_xrocket(query: types.CallbackQuery, callback_data: PayMethod | PremiumPayMethod, repo: Repositories) -> None:
+    from decimal import Decimal
+    from html import escape
+    from bot.settings import settings
+    from bot.xrocket_payments import create_invoice
+    if not settings.xrocket.token:
+        await query.answer('Оплата через xRocket временно недоступна.', show_alert=True)
+        return
+    recipient = callback_data.recipient or query.from_user.username
+    if not recipient:
+        await query.answer('Для покупки установите @username в Telegram.', show_alert=True)
+        return
+    await query.answer()
+    premium = isinstance(callback_data, PremiumPayMethod)
+    quantity = callback_data.months if premium else callback_data.stars_count
+    try:
+        if premium:
+            quote = await asyncio.to_thread(_get_premium_quote, recipient, quantity)
+            if not quote.get('ok'):
+                raise ValueError('Premium quote unavailable')
+            usd = Decimal(str(quote['usd_amount']))
+            base = await referrals.premium_stars(usd)
+        else:
+            base = quantity
+            usd = Decimal(str(await repo.users.get_stars_course())) * quantity
+        invoice, url = await create_invoice(
+            bot_id=query.bot.id, buyer_id=query.from_user.id, chat_id=query.message.chat.id,
+            recipient=recipient, product='premium' if premium else 'stars', quantity=quantity,
+            usd=usd, base_stars=base,
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).warning('xRocket invoice creation failed: %s', type(exc).__name__)
+        keyboard = (premium_payment_method_keyboard(quantity, callback_data.recipient, 'crypto') if premium
+                    else payment_method_keyboard(quantity, callback_data.recipient, 'crypto'))
+        await get_editor(query)('Не удалось создать счёт xRocket. Попробуйте позже или выберите другой способ оплаты.', reply_markup=keyboard)
+        return
+    product = f'Telegram Premium на {quantity} мес.' if premium else f'{quantity} звёзд'
+    markup = (premium_payment_redirect_keyboard(quantity, url, callback_data.recipient) if premium
+              else payment_redirect_keyboard(quantity, url, callback_data.recipient))
+    await get_editor(query)(
+        f'<b>Оплата через xRocket</b>\n\nЗаказ: {product}\nПолучатель: @{escape(recipient)}\n'
+        f'К оплате: <b>{Decimal(invoice.atomic_amount) / 10**6} USDT</b> (комиссия 2%)\n\n'
+        'Время на оплату: 15 минут.\nНажмите кнопку ниже и оплатите счёт. '
+        'После подтверждения оплаты заказ будет обработан автоматически.', reply_markup=markup,
+    )
 
 
 @router.callback_query(PayMethod.filter(F.method.in_({'pay_ton', 'pay_usdt_ton'})))

@@ -100,6 +100,14 @@ class NotificationsSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix='NOTIFICATIONS_')
 
 
+class XRocketSettings(BaseSettings):
+    token: str = ''
+    webhook_token: str = ''
+    callback_url: str = ''
+
+    model_config = SettingsConfigDict(env_prefix='XROCKET_')
+
+
 class Settings(BaseSettings):
     log_chat: int | None = None
     admins: list[int]
@@ -113,6 +121,7 @@ class Settings(BaseSettings):
     ton_api: TonAPISettings = TonAPISettings()
     frekassa: FrekassaSettings = FrekassaSettings()
     notifications: NotificationsSettings = NotificationsSettings()
+    xrocket: XRocketSettings = XRocketSettings()
 
 
 settings = Settings()

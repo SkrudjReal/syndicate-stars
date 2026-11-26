@@ -30,6 +30,7 @@ async def db(monkeypatch):
     from bot import notifications
     from bot import wallet_payments
     from bot import broadcasts
+    from bot import xrocket_payments
     url = os.getenv('REFERRAL_TEST_DATABASE_URL')
     if not url:
         pytest.skip('Dedicated PostgreSQL test database not configured')
@@ -42,6 +43,7 @@ async def db(monkeypatch):
     monkeypatch.setattr(notifications, 'sessionmaker', sessions)
     monkeypatch.setattr(wallet_payments, 'sessionmaker', sessions)
     monkeypatch.setattr(broadcasts, 'sessionmaker', sessions)
+    monkeypatch.setattr(xrocket_payments, 'sessionmaker', sessions)
     async with sessions() as session:
         session.add_all([
             User(id=1, full_name='Referrer'),
@@ -221,6 +223,69 @@ async def test_broadcast_draft_and_preview_do_not_send_to_audience_and_restore_p
     assert restored.content.message.caption_entities[0].custom_emoji_id == '5208968969750330825'
     assert restored.chats.pending.ids == {1, 2, 3}
     assert not broadcasts.tasks
+
+
+async def make_xrocket_invoice(monkeypatch):
+    from bot import xrocket_payments as rocket
+    monkeypatch.setattr(rocket.rate_cache, 'get', AsyncMock(return_value=SimpleNamespace(usdt_usd=Decimal('1'))))
+    async def create(method, path, *, body):
+        assert (method, path) == ('POST', '/api/v1/invoices')
+        assert body['priceCurrency'] == 'USDT'
+        assert body['expiresIn'] == 900_000
+        return dict(id='invoice-' + body['clientInvoiceId'], clientInvoiceId=body['clientInvoiceId'],
+                    priceAmount=body['priceAmount'], priceCurrency='USDT', status='active', links={'telegramBotLink': 'https://t.me/xRocket?start=test'})
+    monkeypatch.setattr(rocket.client, 'request', create)
+    invoice, _ = await rocket.create_invoice(bot_id=123, buyer_id=2, chat_id=2, recipient='friend_user',
+                                            product='stars', quantity=50, usd='.75', base_stars=50)
+    return invoice, dict(id='invoice-' + invoice.order_id, clientInvoiceId=invoice.order_id,
+                         priceAmount='0.77', priceCurrency='USDT', status='paid')
+
+
+async def test_xrocket_paid_invoice_and_referral_credit_are_once(db, monkeypatch):
+    from bot import xrocket_payments as rocket, wallet_payments as wallet, cryptopay
+    from bot.database.models import WalletInvoice
+    invoice, dto = await make_xrocket_invoice(monkeypatch)
+    assert sum(await asyncio.gather(*(rocket.apply_invoice(dto) for _ in range(5)))) == 1
+    monkeypatch.setattr(cryptopay, 'fragment_api', None)
+    bot = SimpleNamespace(send_message=AsyncMock())
+    await wallet.deliver(invoice, bot)
+    await wallet.deliver(invoice, bot)
+    async with db() as s:
+        assert (await s.get(WalletInvoice, invoice.id)).status == 'credited'
+        assert await s.scalar(select(UserStars.stars).where(UserStars.user_id == 2)) == 50
+        assert await s.scalar(select(UserStars.stars).where(UserStars.user_id == 1)) == Decimal('7.50')
+        assert await s.scalar(select(ReferralPayment.status).where(ReferralPayment.provider == 'xrocket')) == 'credited'
+
+
+async def test_xrocket_rejects_amount_currency_id_mismatches_and_never_downgrades_paid(db, monkeypatch):
+    from bot import xrocket_payments as rocket
+    from bot import wallet_payments
+    from bot.database.models import WalletInvoice
+    invoice, dto = await make_xrocket_invoice(monkeypatch)
+    assert not await wallet_payments.confirm(invoice.id, dict(memo=invoice.order_id, amount=int(invoice.atomic_amount), timestamp=invoice.created, transaction='f' * 64))
+    for override in [{'priceAmount': '.76'}, {'priceAmount': 'NaN'}, {'priceAmount': '0.77000000000000000000000000001'}, {'priceCurrency': 'TON'}, {'id': 'another-id'}]:
+        with pytest.raises(ValueError): await rocket.apply_invoice({**dto, **override})
+    assert await rocket.apply_invoice(dto)
+    assert not await rocket.apply_invoice({**dto, 'status': 'active'})
+    async with db() as s:
+        assert (await s.get(WalletInvoice, invoice.id)).status == 'paid'
+
+
+async def test_xrocket_ambiguous_create_reads_back_same_client_id(db, monkeypatch):
+    from bot import xrocket_payments as rocket
+    monkeypatch.setattr(rocket.rate_cache, 'get', AsyncMock(return_value=SimpleNamespace(usdt_usd=Decimal('1'))))
+    sent = []
+    async def request(method, path, *, body):
+        sent.append(body['clientInvoiceId'])
+        raise TimeoutError
+    async def read_back(client_id):
+        assert client_id == sent[0]
+        return dict(id='recover-id', clientInvoiceId=client_id, priceAmount='.77', priceCurrency='USDT', status='active', links={'telegramBotLink': 'https://t.me/xRocket?start=recovered'})
+    monkeypatch.setattr(rocket.client, 'request', request)
+    monkeypatch.setattr(rocket.client, 'get_invoice', read_back)
+    invoice, url = await rocket.create_invoice(bot_id=123, buyer_id=2, chat_id=2, recipient='friend_user', product='stars', quantity=50, usd='.75', base_stars=50)
+    assert len(sent) == 1 and invoice.order_id == sent[0]
+    assert url.endswith('recovered')
 
 
 @pytest.mark.asyncio

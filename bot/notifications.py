@@ -1,6 +1,7 @@
 """FreeKassa receipts. This process records payments; the bot handles delivery."""
 import hashlib
 import hmac
+import json
 from decimal import Decimal, InvalidOperation
 
 from aiohttp import web
@@ -13,6 +14,7 @@ from bot.settings import settings
 
 FREKASSA = web.AppKey('frekassa', object)
 RETURN_URL = web.AppKey('return_url', str)
+XROCKET = web.AppKey('xrocket', object)
 
 async def register_order(payment_id, shop_id, amount, currency):
     async with sessionmaker() as session:
@@ -93,10 +95,34 @@ async def health(request):
     return web.json_response({'status': 'ok'})
 
 
-def create_app(config=None, return_url=None):
+async def xrocket_notification(request):
+    from bot.xrocket_payments import verify_signature, apply_invoice
+    config = request.app[XROCKET]
+    if not config.webhook_token:
+        raise web.HTTPServiceUnavailable(text='Not configured')
+    raw = await request.read()
+    if not verify_signature(raw, request.headers, config.webhook_token):
+        raise web.HTTPUnauthorized(text='Invalid signature')
+    try:
+        event = json.loads(raw)
+        if not isinstance(event, dict) or not isinstance(event.get('id'), str):
+            raise ValueError
+        data = event.get('data', {})
+        if event.get('type') == 'invoice' and isinstance(data, dict) and data.get('event') == 'invoice_status_changed':
+            if not isinstance(data.get('invoice'), dict):
+                raise ValueError
+            await apply_invoice(data['invoice'])
+    except (ValueError, TypeError):
+        raise web.HTTPBadRequest(text='Invalid invoice event') from None
+    return web.Response(text='OK')
+
+
+def create_app(config=None, return_url=None, xrocket_config=None):
     app = web.Application(client_max_size=16384)
     app[FREKASSA] = config or settings.frekassa
     app[RETURN_URL] = return_url or settings.notifications.return_url
+    app[XROCKET] = xrocket_config or settings.xrocket
+    app.router.add_post('/notifications/xrocket', xrocket_notification)
     app.router.add_route('POST', '/notifications/payment', payment)
     app.router.add_route('GET', '/notifications/payment', payment)
     for path in ('/return/success', '/return/failure'):

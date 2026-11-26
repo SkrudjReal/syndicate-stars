@@ -10,6 +10,8 @@ class WalletInvoice(Base):
     __tablename__ = 'wallet_invoices'
 
     order_id: Mapped[str] = mapped_column(String(32), unique=True)
+    provider: Mapped[str] = mapped_column(String(20), default='wallet', server_default='wallet')
+    provider_invoice_id: Mapped[str | None] = mapped_column(String(100), unique=True)
     bot_id: Mapped[int] = mapped_column(BigInteger, index=True)
     buyer_id: Mapped[int] = mapped_column(BigInteger)
     chat_id: Mapped[int] = mapped_column(BigInteger)

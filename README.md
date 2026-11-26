@@ -26,7 +26,7 @@ The bot uses Python 3.15.2, uv, aiogram and PostgreSQL.
 | :--- | :--- |
 | Purchases | Stars from 50; Premium for 3, 6 or 12 months |
 | Gifts | Recipient validation through Fragment; usernames only |
-| Payments | CryptoBot, FreeKassa SBP/cards and direct TON/USDT on TON |
+| Payments | CryptoBot, xRocket, FreeKassa SBP/cards and direct TON/USDT on TON |
 | Inline converter | GRAM/TON, Stars, USD, USDT and RUB, with cached exchange rates |
 | Admin panel | ID-based access, broadcast previews, media/albums, custom emoji and delivery statistics |
 | Referrals | 15% credited to the internal balance with duplicate protection |
