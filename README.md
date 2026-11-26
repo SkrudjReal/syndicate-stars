@@ -26,7 +26,9 @@ The bot uses Python 3.15.2, uv, aiogram and PostgreSQL.
 | :--- | :--- |
 | Purchases | Stars from 50; Premium for 3, 6 or 12 months |
 | Gifts | Recipient validation through Fragment; usernames only |
-| Payments | CryptoBot and FreeKassa SBP integrations; provider credentials required |
+| Payments | CryptoBot, FreeKassa SBP/cards and direct TON/USDT on TON |
+| Inline converter | GRAM/TON, Stars, USD, USDT and RUB, with cached exchange rates |
+| Admin panel | ID-based access, broadcast previews, media/albums, custom emoji and delivery statistics |
 | Referrals | 15% credited to the internal balance with duplicate protection |
 | Withdrawals | From 50 Stars, with persistent reservations and transfer review |
 | Welcome | One-time confirmation, premium emoji and cached Telegram photo IDs |
@@ -72,4 +74,5 @@ PostgreSQL integration tests require a disposable database configured via
 ## License and attribution
 
 [MIT](LICENSE). Based on the original bot template by Bupyc; its copyright notice
-is preserved. Support: [@maneramur](https://t.me/maneramur).
+is preserved. Broadcasting uses [aiogram_broadcaster](https://github.com/loRes228/aiogram_broadcaster) (MIT).
+Support: [@maneramur](https://t.me/maneramur), [@velunae](https://t.me/velunae).

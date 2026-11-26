@@ -45,7 +45,7 @@ async def continue_welcome(query: types.CallbackQuery, repo: Repositories, state
     await query.message.edit_reply_markup(reply_markup=None)
     await send_photo(
         query.message, messages.IMAGE_PATHS['main_menu'],
-        caption=messages.WELCOME_MESSAGE, reply_markup=start_keyboard(),
+        caption=messages.WELCOME_MESSAGE, reply_markup=start_keyboard(query.from_user.id),
     )
     await query.answer()
 
@@ -74,7 +74,7 @@ async def start(msg: types.Message, repo: Repositories, bot: Bot, state: FSMCont
     await send_photo(
         msg, messages.IMAGE_PATHS['main_menu'],
         caption=messages.WELCOME_MESSAGE,
-        reply_markup=start_keyboard(),
+        reply_markup=start_keyboard(msg.from_user.id),
     )
 
 @router.callback_query(
@@ -85,7 +85,7 @@ async def return_menu(
     query: types.CallbackQuery, state: FSMContext,
     dialog_manager: DialogManager) -> None:
 
-    await send_section(query, 'main_menu', messages.WELCOME_MESSAGE, reply_markup=start_keyboard())
+    await send_section(query, 'main_menu', messages.WELCOME_MESSAGE, reply_markup=start_keyboard(query.from_user.id))
     await state.clear()
     await dialog_manager.reset_stack()
     await query.answer()

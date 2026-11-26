@@ -44,6 +44,18 @@ wheels = [
 ]
 
 [[package]]
+name = "aiogram-broadcaster"
+version = "0.6.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiogram" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/83/76/19f531a4cd5d2988347e83daa2d897c6ff26f8e9885a5e0c5632ed4e82de/aiogram_broadcaster-0.6.8.tar.gz", hash = "sha256:fbc2d2033e492630b15ab40b7e44a8b6f3e16b6a964a3c21a8adb29a26e5fc94", size = 32994, upload-time = "2025-10-17T19:27:36.538Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/20/c0/6aca91e4203206faa37d8ffce24787a7376bf6e8e416331f73df26b80574/aiogram_broadcaster-0.6.8-py3-none-any.whl", hash = "sha256:e7f8335628107e8151089204fb48890b4a44a8e17f1fafee2dab9b5a1e934ce6", size = 58290, upload-time = "2025-10-17T19:27:35.616Z" },
+]
+
+[[package]]
 name = "aiogram-dialog"
 version = "2.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1273,6 +1285,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "aiocryptopay" },
     { name = "aiogram" },
+    { name = "aiogram-broadcaster" },
     { name = "aiogram-dialog" },
     { name = "alembic" },
     { name = "asyncpg" },
@@ -1310,6 +1323,7 @@ test = [
 requires-dist = [
     { name = "aiocryptopay", specifier = ">=0.4.8,<0.5.0" },
     { name = "aiogram", specifier = ">=3.10.0,<4.0.0" },
+    { name = "aiogram-broadcaster", specifier = "==0.6.8" },
     { name = "aiogram-dialog", specifier = ">=2.4.0,<3.0.0" },
     { name = "alembic", specifier = ">=1.13.1,<2.0.0" },
     { name = "asyncpg", specifier = ">=0.31,<1" },

@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import logging
 import re
+from uuid import uuid4
 
 from aiogram import Router, types, F
 from aiogram.exceptions import TelegramBadRequest
@@ -15,7 +16,7 @@ from bot.utils.callback_factory.callback_factory import (
     Calculator, AccountBalance,
 )
 from bot.keyboards.inline import (
-    buy_stars_section_keyboard, stars_sell_count_keyboard,
+    buy_stars_section_keyboard, gift_section_keyboard, stars_sell_count_keyboard,
     payment_method_keyboard, rub_payment_keyboard, payment_redirect_keyboard,
     premium_months_keyboard, premium_payment_method_keyboard,
     premium_rub_payment_keyboard, premium_payment_redirect_keyboard,
@@ -57,7 +58,7 @@ BUY_STARS_CUSTOM = (
 
 BUY_STARS_AMOUNT_CHOSEN = (
     f'{_P["white_star"]} <b>Вы выбрали {{stars}}</b> звёзд\n\n'
-    'Выберите способ оплаты:'
+    'Выберите категорию оплаты:'
 )
 
 BUY_STARS_LIMIT = '❌ Минимум — <b>50</b> звёзд. Введите корректное значение.'
@@ -71,7 +72,7 @@ BUY_PREMIUM_MENU = (
 
 BUY_PREMIUM_CHOSEN = (
     '🎁 <b>Telegram Premium на {months}</b>\n\n'
-    'Выберите способ оплаты:'
+    'Выберите категорию оплаты:'
 )
 
 REDIRECT_TO_PAYMENT = (
@@ -207,14 +208,61 @@ async def stars_section_menu(query: types.CallbackQuery, repo: Repositories, sta
     await query.answer()
 
 
+@router.callback_query(BuyStars.filter(F.action == 'gift_menu'))
+async def gift_section_menu(query: types.CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await send_section(
+        query, 'buy_stars',
+        '🎁 <b>Купить другу</b>\n\n'
+        'Подарите Telegram Stars или Telegram Premium другу.\n'
+        'Выберите подарок и количество звёзд или срок Premium, затем укажите <b>@username</b> получателя.\n'
+        'Подарки по числовому ID недоступны.',
+        reply_markup=gift_section_keyboard(),
+    )
+    await query.answer()
+
+
 @router.callback_query(BuyStars.filter(F.action == 'gift'))
 @router.callback_query(BuyPremium.filter(F.action == 'gift'))
+async def gift_product_chosen(query: types.CallbackQuery, callback_data: BuyStars | BuyPremium, state: FSMContext) -> None:
+    await state.clear()
+    premium = isinstance(callback_data, BuyPremium)
+    await get_editor(query)(
+        BUY_PREMIUM_MENU if premium else BUY_STARS_MENU,
+        reply_markup=premium_months_keyboard(gift=True) if premium else stars_sell_count_keyboard(gift=True),
+    )
+    await query.answer()
+
+
+def _gift_prompt(product: str, quantity: int) -> str:
+    product_text = f'Telegram Premium на {quantity} мес.' if product == 'premium' else f'{quantity} звёзд'
+    return f'🎁 Вы выбрали {product_text}.\n\nУкажите <b>@username</b> друга. Числовой ID не принимается.\nСебя указывать нельзя.'
+
+
+async def _edit_gift_message(msg: types.Message, data: dict, text: str, reply_markup=None):
+    kwargs = dict(chat_id=data['gift_chat_id'], message_id=data['gift_message_id'], reply_markup=reply_markup)
+    if data['gift_caption']:
+        return await msg.bot.edit_message_caption(caption=text, **kwargs)
+    return await msg.bot.edit_message_text(text=text, **kwargs)
+
+
+@router.callback_query(BuyStars.filter(F.action == 'gift_amount'))
+@router.callback_query(BuyPremium.filter(F.action == 'gift_period'))
 async def gift_recipient_start(query: types.CallbackQuery, callback_data: BuyStars | BuyPremium, state: FSMContext) -> None:
+    premium = isinstance(callback_data, BuyPremium)
+    quantity = callback_data.months if premium else callback_data.stars_count
+    if (premium and quantity not in (3, 6, 12)) or (not premium and quantity < 50):
+        await query.answer('Выберите корректное количество или срок.', show_alert=True)
+        return
     await state.clear()
     await state.set_state(GiftRecipient.username)
-    await state.update_data(gift_product='premium' if isinstance(callback_data, BuyPremium) else 'stars')
+    await state.update_data(
+        gift_product='premium' if premium else 'stars', gift_quantity=quantity,
+        gift_chat_id=query.message.chat.id, gift_message_id=query.message.message_id,
+        gift_caption=query.message.caption is not None, gift_request=uuid4().hex,
+    )
     await get_editor(query)(
-        '🎁 Укажите <b>@username</b> друга. Числовой ID не принимается.',
+        _gift_prompt('premium' if premium else 'stars', quantity),
         reply_markup=gift_cancel_keyboard(),
     )
     await query.answer()
@@ -222,38 +270,59 @@ async def gift_recipient_start(query: types.CallbackQuery, callback_data: BuySta
 
 @router.message(GiftRecipient.username)
 async def gift_recipient_entered(msg: types.Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    async def invalid(text):
+        current = await state.get_data()
+        if await state.get_state() == GiftRecipient.username.state and current.get('gift_request') == data.get('gift_request'):
+            await _edit_gift_message(msg, data, text, gift_cancel_keyboard())
     value = (msg.text or '').strip()
     if not re.fullmatch(r'@[A-Za-z][A-Za-z0-9_]{3,30}[A-Za-z0-9]', value):
-        await msg.answer('Укажите @username: 5–32 латинских символа. ID и ссылки не принимаются.', reply_markup=gift_cancel_keyboard())
+        await invalid('Укажите @username: 5–32 латинских символа. ID и ссылки не принимаются.')
+        return
+    if value[1:].casefold() == (msg.from_user.username or '').casefold():
+        await invalid('Себя указывать нельзя. Укажите @username друга.')
+        await msg.delete()
         return
     if not fragment_api:
-        await msg.answer('Проверка получателя временно недоступна.', reply_markup=gift_cancel_keyboard())
+        await invalid('Проверка получателя временно недоступна.')
         return
-    product = (await state.get_data())['gift_product']
+    product = data['gift_product']
+    quantity = data['gift_quantity']
     username = value[1:]
     try:
         if product == 'premium':
-            result = await asyncio.to_thread(fragment_api.search_premium_gift_recipient, username, 3)
+            result = await asyncio.to_thread(fragment_api.search_premium_gift_recipient, username, quantity)
         else:
             result = await asyncio.to_thread(fragment_api.search_recipient, username)
     except Exception:
-        await msg.answer('Не удалось проверить получателя. Попробуйте позже.', reply_markup=gift_cancel_keyboard())
+        await invalid('Не удалось проверить получателя. Попробуйте позже.')
+        return
+    # Cancelling or choosing another order while Fragment responds invalidates this result.
+    if await state.get_state() != GiftRecipient.username.state or (await state.get_data()).get('gift_request') != data['gift_request']:
         return
     if not result.get('found', {}).get('recipient'):
-        await msg.answer('Получатель недоступен для этого подарка. Проверьте @username.', reply_markup=gift_cancel_keyboard())
+        await invalid('Получатель недоступен для этого подарка. Проверьте @username.')
         return
-    keyboard = premium_months_keyboard(username) if product == 'premium' else stars_sell_count_keyboard(username)
-    await msg.answer(f'🎁 Получатель: @{username}\nВыберите срок Premium или количество звёзд:', reply_markup=keyboard)
+    normalized = str(result.get('found', {}).get('username') or username).lstrip('@')
+    if normalized.casefold() == (msg.from_user.username or '').casefold():
+        await invalid('Себя указывать нельзя. Укажите @username друга.')
+        await msg.delete()
+        return
+    keyboard = premium_payment_method_keyboard(quantity, username) if product == 'premium' else payment_method_keyboard(quantity, username)
+    text = (BUY_PREMIUM_CHOSEN.format(months=_premium_months_label(quantity)) if product == 'premium'
+            else BUY_STARS_AMOUNT_CHOSEN.format(stars=quantity))
+    await _edit_gift_message(msg, data, text + f'\nПолучатель: @{username}', keyboard)
+    await msg.delete()
     await state.clear()
 
 
 # ── Buy Stars ──
 
 @router.callback_query(BuyStars.filter(F.action == 'buy'))
-async def buy_stars_show_amounts(query: types.CallbackQuery) -> None:
+async def buy_stars_show_amounts(query: types.CallbackQuery, callback_data: BuyStars) -> None:
     edit = get_editor(query)
     with contextlib.suppress(TelegramBadRequest):
-        await edit(BUY_STARS_MENU, reply_markup=stars_sell_count_keyboard())
+        await edit(BUY_STARS_MENU, reply_markup=stars_sell_count_keyboard(callback_data.recipient))
     await query.answer()
 
 
@@ -290,20 +359,35 @@ async def buy_stars_amount_chosen(query: types.CallbackQuery, callback_data: Buy
 
 
 @router.callback_query(BuyStars.filter(F.action == 'custom'))
+@router.callback_query(BuyStars.filter(F.action == 'gift_custom'))
 async def buy_stars_custom(query: types.CallbackQuery, state: FSMContext, callback_data: BuyStars) -> None:
     edit = get_editor(query)
     with contextlib.suppress(TelegramBadRequest):
-        await edit(BUY_STARS_CUSTOM)
+        await edit(BUY_STARS_CUSTOM, reply_markup=gift_cancel_keyboard() if callback_data.action == 'gift_custom' else None)
     await state.set_state(CustomStarsAmount.amount)
-    await state.update_data(purchase_recipient=callback_data.recipient)
+    await state.update_data(
+        purchase_recipient=callback_data.recipient, purchase_gift=callback_data.action == 'gift_custom',
+        gift_chat_id=query.message.chat.id, gift_message_id=query.message.message_id,
+        gift_caption=query.message.caption is not None,
+    )
     await query.answer()
 
 
 @router.message(CustomStarsAmount.amount, F.text.regexp(r'^\d+$'))
 async def buy_stars_custom_entered(msg: types.Message, state: FSMContext) -> None:
     amount = int(msg.text)
+    data = await state.get_data()
     if amount < 50:
-        await msg.answer(BUY_STARS_LIMIT)
+        if data.get('purchase_gift'):
+            await _edit_gift_message(msg, data, BUY_STARS_LIMIT, gift_cancel_keyboard())
+        else:
+            await msg.answer(BUY_STARS_LIMIT)
+        return
+    if data.get('purchase_gift'):
+        await state.set_state(GiftRecipient.username)
+        await state.update_data(gift_product='stars', gift_quantity=amount, gift_request=uuid4().hex)
+        await _edit_gift_message(msg, data, _gift_prompt('stars', amount), gift_cancel_keyboard())
+        await msg.delete()
         return
 
     await msg.answer(
@@ -314,11 +398,100 @@ async def buy_stars_custom_entered(msg: types.Message, state: FSMContext) -> Non
 
 
 @router.message(CustomStarsAmount.amount)
-async def buy_stars_custom_invalid(msg: types.Message) -> None:
-    await msg.answer(BUY_STARS_LIMIT)
+async def buy_stars_custom_invalid(msg: types.Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get('purchase_gift'):
+        await _edit_gift_message(msg, data, BUY_STARS_LIMIT, gift_cancel_keyboard())
+    else:
+        await msg.answer(BUY_STARS_LIMIT)
 
 
 # ── Payment Methods ──
+
+@router.callback_query(PayMethod.filter(F.method.in_({'category_menu', 'category_rub', 'category_crypto', 'category_other'})))
+@router.callback_query(PremiumPayMethod.filter(F.method.in_({'category_menu', 'category_rub', 'category_crypto', 'category_other'})))
+async def payment_category(query: types.CallbackQuery, callback_data: PayMethod | PremiumPayMethod) -> None:
+    from html import escape
+    category = callback_data.method.removeprefix('category_')
+    category = '' if category == 'menu' else category
+    titles = {'': 'Выберите категорию оплаты:', 'rub': 'Рубли / СБП / Карты',
+              'crypto': 'Криптовалюта', 'other': 'Другие способы оплаты'}
+    if isinstance(callback_data, PremiumPayMethod):
+        product = f'Telegram Premium на {_premium_months_label(callback_data.months)}'
+        keyboard = premium_payment_method_keyboard(callback_data.months, callback_data.recipient, category)
+    else:
+        product = f'{callback_data.stars_count} звёзд'
+        keyboard = payment_method_keyboard(callback_data.stars_count, callback_data.recipient, category)
+    recipient = callback_data.recipient or query.from_user.username
+    text = f'<b>{titles[category]}</b>\n\nЗаказ: {product}'
+    if recipient:
+        text += f'\nПолучатель: @{escape(recipient)}'
+    await query.answer()
+    await get_editor(query)(text, reply_markup=keyboard)
+
+
+UNCONFIGURED_PAYMENTS = {'pay_lolzteam', 'pay_xrocket', 'pay_codeesbp', 'pay_codeecard',
+                       'pay_plategasbp', 'pay_plategacrypto', 'pay_iris', 'pay_uah'}
+
+
+@router.callback_query(PayMethod.filter(F.method.in_(UNCONFIGURED_PAYMENTS)))
+@router.callback_query(PremiumPayMethod.filter(F.method.in_(UNCONFIGURED_PAYMENTS)))
+async def payment_not_configured(query: types.CallbackQuery) -> None:
+    await query.answer('Этот способ оплаты пока недоступен. Выберите другой.', show_alert=True)
+
+
+@router.callback_query(PayMethod.filter(F.method.in_({'pay_ton', 'pay_usdt_ton'})))
+@router.callback_query(PremiumPayMethod.filter(F.method.in_({'pay_ton', 'pay_usdt_ton'})))
+async def pay_wallet(query: types.CallbackQuery, callback_data: PayMethod | PremiumPayMethod, repo: Repositories) -> None:
+    from decimal import Decimal
+    from html import escape
+    from bot.settings import settings
+    from bot.wallet_payments import create_invoice, UNITS
+    from bot.keyboards.inline import wallet_payment_keyboard
+
+    if not settings.ton_api.receive_address or not settings.ton_api.api_key:
+        await query.answer('Оплата на TON-кошелёк временно недоступна.', show_alert=True)
+        return
+    recipient = callback_data.recipient or query.from_user.username
+    if not recipient:
+        await query.answer('Для покупки установите @username в Telegram.', show_alert=True)
+        return
+    await query.answer()
+    premium = isinstance(callback_data, PremiumPayMethod)
+    quantity = callback_data.months if premium else callback_data.stars_count
+    try:
+        if premium:
+            quote = await asyncio.to_thread(_get_premium_quote, recipient, quantity)
+            if not quote.get('ok'):
+                await query.message.answer('Не удалось получить стоимость Premium. Попробуйте позже.')
+                return
+            usd = Decimal(str(quote['usd_amount']))
+            base = await referrals.premium_stars(usd)
+        else:
+            base = quantity
+            usd = Decimal(str(await repo.users.get_stars_course())) * quantity
+        invoice = await create_invoice(
+            bot_id=query.bot.id, buyer_id=query.from_user.id, chat_id=query.message.chat.id,
+            recipient=recipient, product='premium' if premium else 'stars', quantity=quantity,
+            asset='TON' if callback_data.method == 'pay_ton' else 'USDT', usd=usd, base_stars=base,
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).warning('Wallet invoice creation failed: %s', type(exc).__name__)
+        await query.message.answer('Не удалось создать счёт. Попробуйте позже или выберите другой способ оплаты.')
+        return
+    label = 'TON' if invoice.asset == 'TON' else 'USDT (TON)'
+    product = f'Premium на {quantity} мес.' if premium else f'{quantity} звёзд'
+    value = Decimal(invoice.atomic_amount) / UNITS[invoice.asset]
+    await get_editor(query)(
+        f'<b>Счёт {label}</b>\n\nПолучатель: @{escape(recipient)}\nТовар: {product}\n\n'
+        f'Переведите точную сумму: <code>{value}</code> {label}\n'
+        f'На кошелёк: <code>{invoice.receiver}</code>\n\n'
+        f'Обязательный комментарий (TAG/MEMO):\n<code>{invoice.order_id}</code>\n\n'
+        'Сеть — TON. Срок оплаты — 15 минут. Комиссию сети оплачивает отправитель.\n'
+        'После подтверждения перевода заказ будет обработан автоматически. '
+        'Не отправляйте повторно; если срок истёк или возникли вопросы — @maneramur или @velunae.',
+        reply_markup=wallet_payment_keyboard(invoice, callback_data.recipient),
+    )
 
 @router.callback_query(BuyStars.filter(F.action == 'dismiss_invoice'))
 async def dismiss_invoice_message(query: types.CallbackQuery) -> None:
@@ -493,7 +666,7 @@ async def pay_frekassa(
     commission = messages.COMMISSION_PERCENT_FK
     amount_rub = round(stars_count * stars_course * 100 * (1 + commission / 100), 2)
 
-    order_id = f'sq_{query.from_user.id}_{stars_count}_{int(asyncio.get_event_loop().time())}'
+    order_id = uuid4().hex
     email = f'{query.from_user.id}@telegram.org'
 
     pay_url = await fk_client.create_order(
@@ -517,7 +690,7 @@ async def pay_frekassa(
         'Нажмите кнопку ниже для оплаты.\n'
         '⏳ После оплаты бот автоматически отправит звёзды выбранному получателю '
         '(если отправка не удастся, они зачислятся на резервный баланс в боте).',
-        reply_markup=payment_redirect_keyboard(stars_count, pay_url, callback_data.recipient),
+        reply_markup=payment_redirect_keyboard(stars_count, pay_url, callback_data.recipient, category='rub'),
     )
     await query.answer()
 
@@ -563,7 +736,7 @@ async def pay_premium_frekassa(
     ton_amount = quote_data['ton_amount']
     commission = messages.COMMISSION_PERCENT_FK
     amount_rub = round(rub_amount * (1 + commission / 100), 2)
-    order_id = f'prem_{query.from_user.id}_{months}_{int(asyncio.get_event_loop().time())}'
+    order_id = uuid4().hex
     email = f'{query.from_user.id}@telegram.org'
 
     pay_url = await fk_client.create_order(
@@ -587,7 +760,7 @@ async def pay_premium_frekassa(
         f'Стоимость Fragment: <b>{ton_amount:.2f} TON</b>\n'
         f'К оплате: <b>{amount_rub:.2f} ₽</b> (комиссия {commission}%)\n\n'
         'После оплаты бот автоматически отправит подарок получателю через Fragment.',
-        reply_markup=premium_payment_redirect_keyboard(months, pay_url, callback_data.recipient),
+        reply_markup=premium_payment_redirect_keyboard(months, pay_url, callback_data.recipient, category='rub'),
     )
     await query.answer()
 
@@ -741,24 +914,24 @@ async def withdraw_amount(msg: types.Message, repo: Repositories, state: FSMCont
 
 # ── Calculator ──
 
-@router.callback_query(Calculator.filter(F.action == 'menu'))
-async def calc_menu(query: types.CallbackQuery) -> None:
+@router.callback_query(Calculator.filter(F.action.in_({'menu', 'gift_menu'})))
+async def calc_menu(query: types.CallbackQuery, callback_data: Calculator) -> None:
     edit = get_editor(query)
     with contextlib.suppress(TelegramBadRequest):
-        await edit(CALCULATOR_MENU, reply_markup=calculator_menu_keyboard())
+        await edit(CALCULATOR_MENU, reply_markup=calculator_menu_keyboard(gift=callback_data.action == 'gift_menu'))
     await query.answer()
 
 
-@router.callback_query(Calculator.filter(F.action.in_({'usd_to_stars', 'stars_to_usd'})))
+@router.callback_query(Calculator.filter(F.action.in_({'usd_to_stars', 'stars_to_usd', 'gift_usd_to_stars', 'gift_stars_to_usd'})))
 async def calc_choose_action(query: types.CallbackQuery, callback_data: Calculator, state: FSMContext) -> None:
-    action = callback_data.action
+    action = callback_data.action.removeprefix('gift_')
     text = CALCULATOR_INPUT_USD if action == 'usd_to_stars' else CALCULATOR_INPUT_STARS
 
     edit = get_editor(query)
     with contextlib.suppress(TelegramBadRequest):
         await edit(text)
     await state.set_state(CalculatorInput.amount)
-    await state.update_data(calc_action=action)
+    await state.update_data(calc_action=action, calc_gift=callback_data.action.startswith('gift_'))
     await query.answer()
 
 
@@ -796,5 +969,5 @@ async def calc_entered_amount(msg: types.Message, state: FSMContext, repo: Repos
         course_ton=course_ton_str,
     )
 
-    await msg.answer(text, reply_markup=calculator_menu_keyboard(back=True))
+    await msg.answer(text, reply_markup=calculator_menu_keyboard(back=True, gift=data.get('calc_gift', False)))
     await state.clear()

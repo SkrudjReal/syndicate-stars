@@ -70,6 +70,7 @@ class FragmentAPISettings(BaseSettings):
 class TonAPISettings(BaseSettings):
     mnemonic: str = ''
     api_key: str = ''
+    receive_address: str = ''
 
     model_config = SettingsConfigDict(env_prefix='TONAPI_')
 
@@ -86,8 +87,17 @@ class TonAPISettings(BaseSettings):
 class FrekassaSettings(BaseSettings):
     shop_id: int = 0
     api_key: str = ''
+    secret_word_2: str = ''
 
     model_config = SettingsConfigDict(env_prefix='FREKASSA_')
+
+
+class NotificationsSettings(BaseSettings):
+    host: str = '127.0.0.1'
+    port: int = 8789
+    return_url: str = 'https://t.me/syndicatestars_bot'
+
+    model_config = SettingsConfigDict(env_prefix='NOTIFICATIONS_')
 
 
 class Settings(BaseSettings):
@@ -102,6 +112,7 @@ class Settings(BaseSettings):
     fragment: FragmentAPISettings = FragmentAPISettings()
     ton_api: TonAPISettings = TonAPISettings()
     frekassa: FrekassaSettings = FrekassaSettings()
+    notifications: NotificationsSettings = NotificationsSettings()
 
 
 settings = Settings()

@@ -272,6 +272,8 @@ class FrekassaClient:
         request_data['signature'] = self._sign(request_data)
 
         try:
+            from bot.notifications import register_order
+            await register_order(payment_id, self.shop_id, amount_val, currency)
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f'{self.API_URL}/orders/create',
@@ -291,6 +293,10 @@ class FrekassaClient:
         """Проверяет статус заказа. Возвращает статус или None."""
         import aiohttp
         import time as time_mod
+
+        from bot.notifications import is_confirmed
+        if await is_confirmed(payment_id, self.shop_id):
+            return 'paid'
 
         request_data = {
             'shopId': self.shop_id,

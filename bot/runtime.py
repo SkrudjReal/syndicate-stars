@@ -81,6 +81,9 @@ async def _main() -> None:
     setup_routers(dp)
     setup_dialogs(dp)
 
+    from bot.broadcasts import initialize as initialize_broadcasts, shutdown as shutdown_broadcasts
+    await initialize_broadcasts(bot)
+
     await bot.delete_webhook(drop_pending_updates=settings.bot.drop_pending_updates)
 
     if settings.log_chat:
@@ -88,10 +91,16 @@ async def _main() -> None:
 
     from bot.referrals import recover_payments
     referral_task = asyncio.create_task(recover_payments())
+    from bot.wallet_payments import recover_payments as recover_wallet_payments
+    wallet_task = asyncio.create_task(recover_wallet_payments(bot))
     try:
         with contextlib.suppress(KeyboardInterrupt, SystemExit):
             await dp.start_polling(bot)
     finally:
+        await shutdown_broadcasts()
         referral_task.cancel()
+        wallet_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await referral_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await wallet_task

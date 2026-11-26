@@ -13,8 +13,8 @@ class IsAdmin(BaseFilter):
         if isinstance(event, Message) and event.from_user:
             user = event.from_user.id
 
-        elif isinstance(event, CallbackQuery) and isinstance(event.message, Message) and event.message.from_user:
-            user = event.message.from_user.id
+        elif isinstance(event, CallbackQuery) and event.from_user:
+            user = event.from_user.id
 
         elif isinstance(event, InlineQuery) and event.from_user:
             user = event.from_user.id

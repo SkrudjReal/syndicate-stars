@@ -141,6 +141,7 @@ dmypy.json
 *.sqlite
 *.sqlite3
 *.sqlite*
+*.dump
 .claude/
 .omc/
 .codex/

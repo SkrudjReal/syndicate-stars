@@ -28,6 +28,7 @@ dependencies = [
     "fkassa>=0.0.2,<0.0.3",
     "playwright>=1.58.0,<2.0.0",
     "xrocket",
+    "aiogram-broadcaster==0.6.8",
 ]
 
 [tool.uv]

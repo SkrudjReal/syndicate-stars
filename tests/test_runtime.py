@@ -88,40 +88,54 @@ async def test_gift_fsm_rejects_ids_and_checks_username(monkeypatch, product):
     from aiogram.fsm.storage.base import StorageKey
     from aiogram.fsm.context import FSMContext
     from bot.handlers.users import buy_stars as module
-    from bot.utils.callback_factory.callback_factory import BuyStars, BuyPremium
+    from bot.utils.callback_factory.callback_factory import BuyStars, BuyPremium, PayMethod, PremiumPayMethod
 
     storage = MemoryStorage()
     state = FSMContext(storage, StorageKey(bot_id=1, chat_id=1, user_id=1))
-    query = SimpleNamespace(answer=AsyncMock())
+    query = SimpleNamespace(answer=AsyncMock(), message=SimpleNamespace(chat=SimpleNamespace(id=1), message_id=42, caption='photo'))
     monkeypatch.setattr(module, 'get_editor', lambda q: AsyncMock())
-    callback = BuyPremium(action='gift') if product == 'premium' else BuyStars(action='gift')
+    callback = BuyPremium(action='gift_period', months=6) if product == 'premium' else BuyStars(action='gift_amount', stars_count=500)
     await module.gift_recipient_start(query, callback, state)
     assert await state.get_state() == module.GiftRecipient.username.state
     api = SimpleNamespace(search_recipient=Mock(return_value={'found': {'recipient': 'verified'}}), search_premium_gift_recipient=Mock(return_value={'found': {'recipient': 'verified'}}))
     monkeypatch.setattr(module, 'fragment_api', api)
+    bot = SimpleNamespace(edit_message_caption=AsyncMock(), edit_message_text=AsyncMock())
     for invalid in ('123456789', '@123456789', 'https://t.me/friend_user', '@abc', None):
-        msg = SimpleNamespace(text=invalid, answer=AsyncMock())
+        msg = SimpleNamespace(text=invalid, answer=AsyncMock(), bot=bot, from_user=SimpleNamespace(username='payer_user'), delete=AsyncMock())
         await module.gift_recipient_entered(msg, state)
         assert await state.get_state() == module.GiftRecipient.username.state
     api.search_recipient.assert_not_called()
     api.search_premium_gift_recipient.assert_not_called()
-    msg = SimpleNamespace(text='@friend_user', answer=AsyncMock())
+    msg = SimpleNamespace(text='@friend_user', answer=AsyncMock(), bot=bot, from_user=SimpleNamespace(username='payer_user'), delete=AsyncMock())
     await module.gift_recipient_entered(msg, state)
     assert await state.get_state() is None
-    keyboard = msg.answer.call_args.kwargs['reply_markup']
-    selected = (BuyPremium if product == 'premium' else BuyStars).unpack(keyboard.inline_keyboard[0][0].callback_data)
+    msg.answer.assert_not_awaited()
+    msg.delete.assert_awaited_once()
+    assert bot.edit_message_caption.call_args.kwargs['message_id'] == 42
+    keyboard = bot.edit_message_caption.call_args.kwargs['reply_markup']
+    selected = (PremiumPayMethod if product == 'premium' else PayMethod).unpack(keyboard.inline_keyboard[0][0].callback_data)
     assert selected.recipient == 'friend_user'
+    assert (selected.months if product == 'premium' else selected.stars_count) == (6 if product == 'premium' else 500)
     await storage.close()
 
 
-def test_gift_menu_buttons_are_not_highlighted_and_callback_fits():
-    from bot.keyboards.inline import buy_stars_section_keyboard, payment_method_keyboard, premium_payment_method_keyboard
-    from bot.utils.callback_factory.callback_factory import PayMethod
+def test_gift_menu_mirrors_purchase_buttons_and_callback_fits():
+    from bot.keyboards.inline import buy_stars_section_keyboard, gift_section_keyboard, payment_method_keyboard, premium_payment_method_keyboard
+    from bot.utils.callback_factory.callback_factory import PayMethod, BuyStars, BuyPremium, Calculator
     from pydantic import ValidationError
 
-    row = buy_stars_section_keyboard().inline_keyboard[1]
-    assert [b.text for b in row] == ['Подарить звёзды', 'Подарить Premium']
-    assert all(b.style is None for b in row)
+    assert not any('Подарить' in b.text for r in buy_stars_section_keyboard().inline_keyboard for b in r)
+    row = gift_section_keyboard().inline_keyboard[0]
+    assert [b.text for b in row] == ['Купить звёзды', 'Купить Premium']
+    assert all(b.style == 'primary' for b in row)
+    own = buy_stars_section_keyboard().inline_keyboard
+    gift = gift_section_keyboard().inline_keyboard
+    assert [[(b.text, b.style, b.icon_custom_emoji_id) for b in r] for r in own] == [[(b.text, b.style, b.icon_custom_emoji_id) for b in r] for r in gift]
+    assert BuyStars.unpack(own[0][0].callback_data).action == 'buy'
+    assert BuyStars.unpack(gift[0][0].callback_data).action == 'gift'
+    assert BuyPremium.unpack(own[0][1].callback_data).action == 'menu'
+    assert BuyPremium.unpack(gift[0][1].callback_data).action == 'gift'
+    assert Calculator.unpack(gift[1][0].callback_data).action == 'gift_menu'
     for keyboard in (payment_method_keyboard(1000, 'a' * 32), premium_payment_method_keyboard(12, 'a' * 32)):
         assert all(len(b.callback_data.encode()) <= 64 for r in keyboard.inline_keyboard for b in r)
     with pytest.raises(ValidationError):
@@ -136,9 +150,8 @@ async def test_gift_cancel_clears_fsm(monkeypatch):
 
     state = SimpleNamespace(clear=AsyncMock())
     query = SimpleNamespace(answer=AsyncMock(), from_user=SimpleNamespace(id=1))
-    repo = SimpleNamespace(users=SimpleNamespace(get_stars_balance=AsyncMock(return_value=0)))
     monkeypatch.setattr(module, 'send_section', AsyncMock())
-    await module.stars_section_menu(query, repo, state)
+    await module.gift_section_menu(query, state)
     state.clear.assert_awaited_once()
 
 
@@ -268,17 +281,17 @@ def test_payment_buttons_route_directly_to_sbp_and_back_preserves_amount():
     from bot.keyboards.inline import payment_method_keyboard, premium_payment_method_keyboard, rub_payment_keyboard
     from bot.utils.callback_factory.callback_factory import RubPayMethod, PremiumRubPayMethod, PremiumPayMethod, BuyStars
 
-    buttons = [b for row in payment_method_keyboard(123).inline_keyboard for b in row]
+    buttons = [b for row in payment_method_keyboard(123, category='rub').inline_keyboard for b in row]
     assert buttons[0].style == 'primary'
-    sbp = RubPayMethod.unpack(buttons[1].callback_data)
+    sbp = RubPayMethod.unpack(buttons[0].callback_data)
     assert (sbp.method, sbp.stars_count) == ('frekassa_sbp', 123)
-    premium = [b for row in premium_payment_method_keyboard(6).inline_keyboard for b in row]
+    premium = [b for row in premium_payment_method_keyboard(6, category='rub').inline_keyboard for b in row]
     assert [b.text for b in premium] == [b.text for b in buttons]
     assert [b.style for b in premium] == [b.style for b in buttons]
-    usd_premium = PremiumPayMethod.unpack(premium[2].callback_data)
+    usd_premium = PremiumPayMethod.unpack(next(b.callback_data for row in premium_payment_method_keyboard(6, category='other').inline_keyboard for b in row if 'USD/EUR' in b.text))
     assert (usd_premium.method, usd_premium.months) == ('pay_usd', 6)
     assert premium[0].style == 'primary'
-    sbp_premium = PremiumRubPayMethod.unpack(premium[1].callback_data)
+    sbp_premium = PremiumRubPayMethod.unpack(premium[0].callback_data)
     assert (sbp_premium.method, sbp_premium.months) == ('frekassa_sbp', 6)
     back = BuyStars.unpack(rub_payment_keyboard(123).inline_keyboard[-1][0].callback_data)
     assert (back.action, back.stars_count) == ('', 123)
@@ -303,13 +316,13 @@ async def test_legacy_ruble_buttons_skip_submenus(monkeypatch):
 
 def test_invoice_back_preserves_amount_and_recipient():
     from bot.keyboards.inline import payment_redirect_keyboard
-    from bot.utils.callback_factory.callback_factory import BuyStars
+    from bot.utils.callback_factory.callback_factory import PayMethod
 
     keyboard = payment_redirect_keyboard(123, 'https://example.com/invoice', 'friend_user')
     back = keyboard.inline_keyboard[-1][0]
     assert back.text == 'Вернуться'
-    callback = BuyStars.unpack(back.callback_data)
-    assert (callback.action, callback.stars_count, callback.recipient) == ('', 123, 'friend_user')
+    callback = PayMethod.unpack(back.callback_data)
+    assert (callback.method, callback.stars_count, callback.recipient) == ('category_crypto', 123, 'friend_user')
 
 
 
@@ -380,14 +393,19 @@ def test_storefront_menu_keeps_primary_star_icon_and_support_contact():
     from bot.messages import ICON_EMOJI_IDS
 
     menu = start_keyboard().inline_keyboard
-    assert [len(row) for row in menu] == [1, 2]
+    assert [len(row) for row in menu] == [1, 1, 2]
     primary = menu[0][0]
     assert primary.text.casefold() == 'купить звёзды'
     assert BuyStars.unpack(primary.callback_data).action == 'menu'
     assert primary.icon_custom_emoji_id == ICON_EMOJI_IDS['white_star']
-    assert [button.text for button in menu[1]] == ['Рефералы', 'Поддержка']
+    gift = menu[1][0]
+    assert gift.text == 'Купить Звёзды другу'
+    assert gift.style is None
+    assert primary.style == 'primary'
+    assert BuyStars.unpack(gift.callback_data).action == 'gift_menu'
+    assert [button.text for button in menu[2]] == ['Рефералы', 'Поддержка']
     support = support_keyboard().inline_keyboard
-    assert [button.url for row in support for button in row if button.url] == ['https://t.me/maneramur']
+    assert [button.url for row in support for button in row if button.url] == ['https://t.me/maneramur', 'https://t.me/velunae']
 
 
 @pytest.mark.asyncio
@@ -400,7 +418,7 @@ async def test_task_and_advertising_code_is_not_registered():
     removed = {'earn', 'earn_dialog', 'buy_subscribers', 'create_tasks', 'tasks', 'bot_review', 'auto_tasks', 'channel_post'}
     for router in [*routers, *event_routers]:
         assert router.name.rsplit('.', 1)[-1] not in removed
-    assert set(Base.metadata.tables) == {'users', 'stars', 'user_stars', 'user_withdraws', 'telegram_photos', 'referral_payments'}
+    assert set(Base.metadata.tables) == {'users', 'stars', 'user_stars', 'user_withdraws', 'telegram_photos', 'referral_payments', 'notification_orders', 'wallet_invoices', 'broadcast_mailers'}
     assert set(Repositories.__dataclass_fields__) == {'session', 'users'}
 
 
@@ -450,4 +468,4 @@ async def test_support_command_uses_current_contact(monkeypatch):
     msg.answer_photo.assert_awaited_once()
     assert msg.answer_photo.call_args.kwargs['caption'] == messages.SUPPORT_MESSAGE
     keyboard = msg.answer_photo.call_args.kwargs['reply_markup']
-    assert [button.url for row in keyboard.inline_keyboard for button in row if button.url] == ['https://t.me/maneramur']
+    assert [button.url for row in keyboard.inline_keyboard for button in row if button.url] == ['https://t.me/maneramur', 'https://t.me/velunae']
